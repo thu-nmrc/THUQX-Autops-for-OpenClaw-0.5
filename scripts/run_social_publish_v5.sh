@@ -1,64 +1,21 @@
 #!/bin/bash
 # THUQX Autopost for OpenClaw 1.0 — 四平台一键发布
 # 用法: bash scripts/run_social_publish_v5.sh "主题"
-# 顺序发布（同一 CDP 浏览器下并行会争抢输入焦点）
+# 环境变量: OPENCLAW_CDP_PORT, THUQX_PLATFORM_PAUSE（默认 2）, SKIP_CONTENT_GEN + THUQX_CONTENT_JSON
 set -o pipefail
 
-TOPIC="${1:-AI认知债务}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT_DIR="$(dirname "$SCRIPT_DIR")"
-CDP_PORT="${OPENCLAW_CDP_PORT:-9222}"
+# shellcheck source=/dev/null
+source "${SCRIPT_DIR}/_thuqx_cdp_common.sh"
 
-ensure_cdp() {
-  if curl -s --max-time 2 "http://127.0.0.1:${CDP_PORT}/json" >/dev/null 2>&1; then
-    echo "[CDP] OK (port ${CDP_PORT})"
-    return 0
-  fi
-  echo "[CDP] Chrome not reachable, launching..."
-  if command -v open >/dev/null 2>&1; then
-    open -na "Google Chrome" --args \
-      --remote-debugging-port="${CDP_PORT}" \
-      --user-data-dir="${HOME}/chrome-cdp-profile" \
-      --remote-allow-origins="*" \
-      --no-first-run \
-      "https://x.com" \
-      "https://weibo.com" \
-      "https://creator.xiaohongshu.com/publish/publish?source=official&from=menu&target=article" \
-      "https://mp.weixin.qq.com" 2>/dev/null || true
-  elif command -v google-chrome >/dev/null 2>&1; then
-    google-chrome --remote-debugging-port="${CDP_PORT}" \
-      --user-data-dir="${HOME}/chrome-cdp-profile" \
-      --remote-allow-origins="*" \
-      --no-first-run \
-      "https://x.com" "https://weibo.com" \
-      "https://creator.xiaohongshu.com/publish/publish?source=official&from=menu&target=article" \
-      "https://mp.weixin.qq.com" 2>/dev/null &
-  elif command -v chromium >/dev/null 2>&1; then
-    chromium --remote-debugging-port="${CDP_PORT}" \
-      --user-data-dir="${HOME}/chrome-cdp-profile" \
-      --remote-allow-origins="*" \
-      --no-first-run \
-      "https://x.com" "https://weibo.com" \
-      "https://creator.xiaohongshu.com/publish/publish?source=official&from=menu&target=article" \
-      "https://mp.weixin.qq.com" 2>/dev/null &
-  else
-    echo "[CDP] ERROR: Install Chrome or start CDP manually on port ${CDP_PORT}." >&2
-    exit 1
-  fi
-  for _ in $(seq 1 15); do
-    sleep 2
-    if curl -s --max-time 2 "http://127.0.0.1:${CDP_PORT}/json" >/dev/null 2>&1; then
-      echo "[CDP] Chrome started on port ${CDP_PORT}"
-      return 0
-    fi
-  done
-  echo "[CDP] ERROR: Could not start Chrome with CDP." >&2
-  exit 1
-}
+PAUSE="${THUQX_PLATFORM_PAUSE:-2}"
+TOPIC="${1:-AI认知债务}"
 
-ensure_cdp
+thuqx_ensure_cdp || exit 1
 
-if [ "${SKIP_CONTENT_GEN:-0}" = "1" ] && [ -n "${THUQX_CONTENT_JSON}" ] && [ -f "${THUQX_CONTENT_JSON}" ]; then
+if [ "${SKIP_CONTENT_GEN:-0}" = "1" ] && [ -n "${THUQX_CONTENT_JSON:-}" ] && [ -f "${THUQX_CONTENT_JSON}" ]; then
+  echo "Using pre-generated JSON: ${THUQX_CONTENT_JSON}"
   CONTENT="$(cat "${THUQX_CONTENT_JSON}")"
 else
   echo "Generating content for topic: ${TOPIC}"
@@ -67,6 +24,17 @@ fi
 
 if [ -z "$CONTENT" ]; then
   echo "ERROR: Content generation failed." >&2
+  exit 1
+fi
+
+if ! echo "$CONTENT" | python3 -c "
+import json, sys
+keys = ('twitter','weibo','xhs_title','xhs_body','wechat_title','wechat_body')
+d = json.load(sys.stdin)
+missing = [k for k in keys if k not in d or not str(d[k]).strip()]
+sys.exit(1 if missing else 0)
+" 2>/dev/null; then
+  echo "ERROR: JSON missing required keys or empty values." >&2
   exit 1
 fi
 
@@ -90,14 +58,17 @@ FAIL=0
 echo "[1/4] Twitter..."
 bash "$ROOT_DIR/twitter/tweet.sh" "$TW" 2>&1 | sed 's/^/  [Twitter] /'
 [ "${PIPESTATUS[0]}" -ne 0 ] && FAIL=$((FAIL + 1))
+sleep "$PAUSE"
 
 echo "[2/4] Weibo..."
 bash "$ROOT_DIR/weibo/run_weibo_publish.sh" "$WB" 2>&1 | sed 's/^/  [Weibo] /'
 [ "${PIPESTATUS[0]}" -ne 0 ] && FAIL=$((FAIL + 1))
+sleep "$PAUSE"
 
 echo "[3/4] Xiaohongshu..."
 python3 "$ROOT_DIR/xiaohongshu/cdp_xhs_publish.py" "$XT" "$XB" 2>&1 | sed 's/^/  [XHS] /'
 [ "${PIPESTATUS[0]}" -ne 0 ] && FAIL=$((FAIL + 1))
+sleep "$PAUSE"
 
 echo "[4/4] WeChat (draft)..."
 python3 "$ROOT_DIR/wechat/cdp_wechat_publish.py" "$WT" "$WBODY" 2>&1 | sed 's/^/  [WeChat] /'

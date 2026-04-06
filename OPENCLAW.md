@@ -6,6 +6,7 @@
 
 | 本仓库路径 | OpenClaw skill 目录 |
 |------------|---------------------|
+| `scripts/_thuqx_cdp_common.sh` | `zeelin-social-autopublisher/scripts/_thuqx_cdp_common.sh` |
 | `scripts/generate_content.py` | `zeelin-social-autopublisher/scripts/generate_content.py` |
 | `scripts/run_social_publish_v5.sh` | `zeelin-social-autopublisher/scripts/run_social_publish_v5.sh` |
 | `twitter/*` | `zeelin-twitter-web-autopost/scripts/` |

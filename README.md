@@ -21,6 +21,7 @@
 ├── README.md
 ├── OPENCLAW.md                         # 与 OpenClaw skills 目录的映射说明
 ├── scripts/
+│   ├── _thuqx_cdp_common.sh             # CDP 自检/启动（被 v5 source）
 │   ├── generate_content.py             # 多平台内容生成（JSON stdout）
 │   ├── generate_social_content_v4.py   # 兼容入口，转调 generate_content.py
 │   └── run_social_publish_v5.sh        # 四平台一键顺序发布 + CDP 自检
@@ -68,6 +69,8 @@ open -na "Google Chrome" --args \
 ```bash
 bash scripts/run_social_publish_v5.sh "AI认知债务"
 ```
+
+可选：`THUQX_PLATFORM_PAUSE=3` 加大平台间间隔（秒，默认 2），网络或 SPA 慢时更稳。
 
 执行顺序（**顺序发布**，避免多脚本争抢同一浏览器焦点）：
 
