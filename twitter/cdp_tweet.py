@@ -210,10 +210,61 @@ def post_tweet(tweet_text, port=9222, base_url="https://x.com"):
         cdp_send(ws, "Input.dispatchKeyEvent", {"type": "keyUp", "key": "Backspace", "code": "Backspace"})
         time.sleep(0.3)
 
-        # Type via CDP Input.insertText (triggers React state updates correctly)
-        cdp_send(ws, "Input.insertText", {"text": tweet_text})
+        # Use document.execCommand to insert text — this triggers React/Draft.js state updates
+        escaped = tweet_text.replace("\\", "\\\\").replace("`", "\\`").replace("$", "\\$")
+        insert_result = js_eval(ws, f"""
+        (() => {{
+            const el = document.activeElement;
+            if (!el) return 'NO_ACTIVE';
+            document.execCommand('insertText', false, `{escaped}`);
+            return 'EXEC_CMD';
+        }})()
+        """)
         time.sleep(1)
-        print(f"Text inserted ({len(tweet_text)} chars)")
+
+        # Verify content was inserted and button is enabled
+        verify_insert = js_eval(ws, """
+        (() => {
+            const tb = document.querySelector('[data-testid="tweetTextarea_0"]');
+            const btn = document.querySelector('[data-testid="tweetButton"]');
+            const text = (tb ? tb.textContent : '').trim();
+            return JSON.stringify({
+                hasText: text.length > 0,
+                textLen: text.length,
+                btnDisabled: btn ? btn.disabled : null,
+                btnAriaDisabled: btn ? btn.getAttribute('aria-disabled') : null
+            });
+        })()
+        """)
+        print(f"Text insert: {insert_result}, verify: {verify_insert}")
+
+        # If execCommand didn't work, try Input.insertText as fallback
+        try:
+            v = json.loads(verify_insert) if isinstance(verify_insert, str) else {}
+        except Exception:
+            v = {}
+        if v.get("btnDisabled", True) or v.get("btnAriaDisabled") == "true":
+            print("Button still disabled, trying Input.insertText fallback...")
+            js_eval(ws, JS_FOCUS_TEXTBOX)
+            time.sleep(0.3)
+            cdp_send(ws, "Input.dispatchKeyEvent", {"type": "keyDown", "key": "a", "code": "KeyA", "modifiers": 2})
+            cdp_send(ws, "Input.dispatchKeyEvent", {"type": "keyUp", "key": "a", "code": "KeyA", "modifiers": 2})
+            cdp_send(ws, "Input.dispatchKeyEvent", {"type": "keyDown", "key": "Backspace", "code": "Backspace"})
+            cdp_send(ws, "Input.dispatchKeyEvent", {"type": "keyUp", "key": "Backspace", "code": "Backspace"})
+            time.sleep(0.3)
+            cdp_send(ws, "Input.insertText", {"text": tweet_text})
+            time.sleep(1)
+            js_eval(ws, """
+            (() => {
+                const el = document.activeElement;
+                if (el) {
+                    el.dispatchEvent(new InputEvent('input', {bubbles:true, inputType:'insertText', data:' '}));
+                    el.dispatchEvent(new Event('change', {bubbles:true}));
+                }
+            })()
+            """)
+            time.sleep(1)
+            print("Fallback insert done")
 
         # Click Post button
         for attempt in range(5):

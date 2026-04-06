@@ -17,7 +17,9 @@ ensure_cdp() {
   echo "[CDP] Chrome not reachable, launching..."
   open -na "Google Chrome" --args \
     --remote-debugging-port="${CDP_PORT}" \
-    --user-data-dir="$HOME/chrome-cdp-profile" 2>/dev/null
+    --user-data-dir="$HOME/chrome-cdp-profile" \
+    --remote-allow-origins="*" \
+    --no-first-run 2>/dev/null
   for i in $(seq 1 15); do
     sleep 2
     if curl -s --max-time 2 "http://127.0.0.1:${CDP_PORT}/json" >/dev/null 2>&1; then
@@ -48,35 +50,30 @@ XB="$(extract xhs_body)"
 WT="$(extract wechat_title)"
 WBODY="$(extract wechat_body)"
 
-# ── 四平台并行发布 ───────────────────────────────────
+# ── 四平台顺序发布（CDP 同一浏览器，并行会争抢焦点）────
 echo ""
 echo "========== THUQX 智能传播 =========="
 echo "Twitter / 微博 / 小红书 / 微信公众号"
 echo "====================================="
 echo ""
 
+FAIL=0
+
 echo "[1/4] Publishing Twitter..."
-python3 "$ROOT_DIR/twitter/cdp_tweet.py" "$TW" 2>&1 | sed 's/^/  [Twitter] /' &
-PID_TW=$!
+python3 "$ROOT_DIR/twitter/cdp_tweet.py" "$TW" 2>&1 | sed 's/^/  [Twitter] /'
+[ ${PIPESTATUS[0]} -ne 0 ] && FAIL=$((FAIL+1))
 
 echo "[2/4] Publishing 微博..."
-python3 "$ROOT_DIR/weibo/cdp_weibo_publish.py" "$WB" 2>&1 | sed 's/^/  [Weibo] /' &
-PID_WB=$!
+python3 "$ROOT_DIR/weibo/cdp_weibo_publish.py" "$WB" 2>&1 | sed 's/^/  [Weibo] /'
+[ ${PIPESTATUS[0]} -ne 0 ] && FAIL=$((FAIL+1))
 
 echo "[3/4] Publishing 小红书..."
-python3 "$ROOT_DIR/xiaohongshu/cdp_xhs_publish.py" "$XT" "$XB" 2>&1 | sed 's/^/  [XHS] /' &
-PID_XHS=$!
+python3 "$ROOT_DIR/xiaohongshu/cdp_xhs_publish.py" "$XT" "$XB" 2>&1 | sed 's/^/  [XHS] /'
+[ ${PIPESTATUS[0]} -ne 0 ] && FAIL=$((FAIL+1))
 
 echo "[4/4] Publishing 微信公众号 (草稿)..."
-python3 "$ROOT_DIR/wechat/cdp_wechat_publish.py" "$WT" "$WBODY" 2>&1 | sed 's/^/  [WeChat] /' &
-PID_WC=$!
-
-# ── 等待完成 ─────────────────────────────────────────
-FAIL=0
-wait $PID_TW  || FAIL=$((FAIL+1))
-wait $PID_WB  || FAIL=$((FAIL+1))
-wait $PID_XHS || FAIL=$((FAIL+1))
-wait $PID_WC  || FAIL=$((FAIL+1))
+python3 "$ROOT_DIR/wechat/cdp_wechat_publish.py" "$WT" "$WBODY" 2>&1 | sed 's/^/  [WeChat] /'
+[ ${PIPESTATUS[0]} -ne 0 ] && FAIL=$((FAIL+1))
 
 echo ""
 echo "====================================="

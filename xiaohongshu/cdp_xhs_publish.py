@@ -148,15 +148,13 @@ FOCUS_TITLE_JS = """
 (() => {
     const bad = new Set(['hidden', 'file', 'checkbox', 'radio', 'submit']);
     const sels = [
+        'textarea[placeholder*="输入标题"]',
         'textarea[placeholder*="标题"]',
-        'textarea[placeholder*="填写标题"]',
+        'textarea.d-text[maxlength="64"]',
+        'textarea.d-text',
+        '.rich-editor-title textarea',
         'input[placeholder*="标题"]',
-        'input[placeholder*="填写标题"]',
         'input[maxlength="20"]',
-        'input.d-text',
-        '.d-input input',
-        '.title-container input',
-        'input[type="text"]'
     ];
     for (const s of sels) {
         for (const el of document.querySelectorAll(s)) {
@@ -167,8 +165,8 @@ FOCUS_TITLE_JS = """
             return "OK_TITLE:" + s;
         }
     }
-    const vis = [...document.querySelectorAll("input, textarea")].filter(
-        i => i.offsetParent && !bad.has(i.type));
+    const vis = [...document.querySelectorAll("textarea, input")].filter(
+        i => i.offsetParent && !bad.has(i.type) && i.type !== 'file');
     if (vis[0]) {
         vis[0].focus();
         vis[0].click();
@@ -205,17 +203,35 @@ FOCUS_BODY_JS = """
 })()
 """
 
+CLICK_FORMAT_JS = """
+(() => {
+    for (const b of document.querySelectorAll('button')) {
+        const t = (b.textContent || '').trim();
+        if (t === '一键排版' && b.offsetParent) { b.click(); return 'CLICK'; }
+    }
+    return 'MISS';
+})()
+"""
+
+CLICK_NEXT_JS = """
+(() => {
+    for (const b of document.querySelectorAll('button')) {
+        const t = (b.textContent || '').trim();
+        if (t === '下一步' && b.offsetParent) { b.click(); return 'CLICK'; }
+    }
+    return 'MISS';
+})()
+"""
+
 PUBLISH_JS = """
 (() => {
-    const labels = ['发布笔记', '发布', '立即发布', '定时发布'];
-    for (const n of document.querySelectorAll('button, [role="button"], div[class*="btn"], span[class*="btn"]')) {
+    // Only match exact "发布" button, NOT sidebar "发布笔记"
+    for (const n of document.querySelectorAll('button')) {
         if (!n.offsetParent) continue;
-        const t = (n.textContent || '').replace(/\\s+/g, '').trim();
-        for (const lb of labels) {
-            if (t === lb) {
-                n.click();
-                return 'CLICK:' + t;
-            }
+        const t = (n.textContent || '').trim();
+        if (t === '发布') {
+            n.click();
+            return 'CLICK:发布';
         }
     }
     return 'SKIP';
@@ -294,44 +310,45 @@ def best_frame_for_editor(ws) -> str | None:
     return best_fid
 
 
+CLICK_NEW_ARTICLE_JS = """
+(() => {
+    // Prefer the <button> with exact text
+    for (const n of document.querySelectorAll('button')) {
+        const t = (n.textContent || '').trim();
+        if (t === '新的创作' && n.offsetParent) { n.click(); return 'CLICK_BTN'; }
+    }
+    // Fallback: any clickable with exact match
+    for (const n of document.querySelectorAll('div,span,a')) {
+        const t = (n.textContent || '').trim();
+        if (t === '新的创作' && n.offsetParent) { n.click(); return 'CLICK_OTHER'; }
+    }
+    return 'MISS';
+})()
+"""
+
 def prepare_page(ws):
-    def probe_main():
-        return js_eval(ws, PROBE_JS)
-
-    p0 = probe_main()
-    print("Main-frame probe:", p0)
-    try:
-        o = json.loads(p0)
-        if int(o.get("ce", 0)) < 1 and int(o.get("inputs", 0)) < 2:
-            cdp_send(
-                ws,
-                "Page.navigate",
-                {"url": "https://creator.xiaohongshu.com/publish/publish?source=official&from=menu"},
-            )
-            time.sleep(5)
-            print("After navigate:", probe_main())
-    except Exception:
-        cdp_send(
-            ws,
-            "Page.navigate",
-            {"url": "https://creator.xiaohongshu.com/publish/publish?source=official&from=menu"},
-        )
-        time.sleep(5)
-
-    js_eval(
+    """Navigate to the XHS long-article editor: publish page → '写长文' tab → '新的创作'."""
+    cdp_send(
         ws,
-        """(() => {
-            for (const n of document.querySelectorAll('div,button,span,a')) {
-                const t = (n.textContent || '').replace(/\\s+/g,'').trim();
-                if (/^写图文$|^图文笔记$|^长文$/.test(t) && n.offsetParent) {
-                    n.click();
-                    return 'OPEN:' + t;
-                }
-            }
-            return 'SKIP';
-        })()""",
+        "Page.navigate",
+        {"url": "https://creator.xiaohongshu.com/publish/publish?source=official&from=menu&target=article"},
     )
-    time.sleep(1)
+    time.sleep(3)
+    cdp_send(ws, "Page.reload", {})
+    time.sleep(6)
+    print("Nav to article page:", js_eval(ws, "location.href"))
+
+    # Click 新的创作 (with retry)
+    for attempt in range(4):
+        r = js_eval(ws, CLICK_NEW_ARTICLE_JS)
+        print(f"Click 新的创作 (attempt {attempt+1}):", r)
+        if "CLICK" in str(r):
+            break
+        time.sleep(3)
+
+    time.sleep(4)
+    probe = js_eval(ws, PROBE_JS)
+    print("Editor probe:", probe)
 
 
 def type_into_focused(ws, text: str):
@@ -341,6 +358,15 @@ def type_into_focused(ws, text: str):
     cdp_send(ws, "Input.dispatchKeyEvent", {"type": "keyUp", "key": "Backspace", "code": "Backspace"})
     time.sleep(0.12)
     cdp_send(ws, "Input.insertText", {"text": text})
+    js_eval(ws, """
+    (() => {
+        const el = document.activeElement;
+        if (el) {
+            el.dispatchEvent(new Event('input', {bubbles:true}));
+            el.dispatchEvent(new Event('change', {bubbles:true}));
+        }
+    })()
+    """)
 
 
 def fill_in_context(ws, ctx_id: int, title: str, body: str) -> bool:
@@ -398,13 +424,12 @@ def main():
         if not ok:
             print("Main frame incomplete, trying iframe contexts...")
             fid = best_frame_for_editor(ws)
-            if not fid:
-                print("ERROR: No suitable editor iframe found.", file=sys.stderr)
-                sys.exit(1)
-            print(f"Using iframe frameId={fid[:16]}...")
-            ctx_id = create_ctx(ws, fid)
-            if not fill_in_context(ws, ctx_id, title, body):
-                print("ERROR: Could not fill title/body in iframe.", file=sys.stderr)
+            if fid:
+                print(f"Using iframe frameId={fid[:16]}...")
+                ctx_id = create_ctx(ws, fid)
+                ok = fill_in_context(ws, ctx_id, title, body)
+            if not ok:
+                print("ERROR: Could not fill title/body.", file=sys.stderr)
                 sys.exit(1)
 
         time.sleep(0.8)
@@ -412,36 +437,31 @@ def main():
         if no_publish:
             print("XHS: content filled. Skipping publish (XHS_NO_PUBLISH=1).")
         else:
-            # scroll to bottom so 发布 / 下一步 buttons are visible
+            # Step 1: 一键排版 → template selection
+            fmt_r = js_eval(ws, CLICK_FORMAT_JS)
+            print("一键排版:", fmt_r)
+            time.sleep(8)
+
+            # Step 2: 下一步 → publish settings (with retry)
+            for step_try in range(5):
+                js_eval(ws, "(function(){window.scrollTo(0,document.body.scrollHeight);return 1;})()")
+                time.sleep(1)
+                next_r = js_eval(ws, CLICK_NEXT_JS)
+                print(f"下一步 (attempt {step_try+1}):", next_r)
+                if "CLICK" in str(next_r):
+                    break
+                time.sleep(3)
+            time.sleep(5)
+
+            # Step 3: 发布
             js_eval(ws, "(function(){window.scrollTo(0,document.body.scrollHeight);return 'SCROLLED';})()")
             time.sleep(1)
-
-            # some flows have 下一步 before 发布
-            next_js = """
-            (() => {
-                for (const n of document.querySelectorAll('button, [role="button"]')) {
-                    const t = (n.textContent || '').trim();
-                    if (t === '下一步' && n.offsetParent !== null) {
-                        n.click();
-                        return 'CLICK:下一步';
-                    }
-                }
-                return 'SKIP';
-            })()
-            """
-            next_r = js_eval(ws, next_js)
-            print("Next step:", next_r)
-            if "CLICK" in str(next_r):
-                time.sleep(3)
-                js_eval(ws, "(function(){window.scrollTo(0,document.body.scrollHeight);return 'SCROLLED';})()")
-                time.sleep(1)
-
             r3 = js_eval(ws, PUBLISH_JS)
             print("Publish click:", r3)
 
             success = False
             for attempt in range(5):
-                time.sleep(2)
+                time.sleep(3)
                 confirm_r = js_eval(ws, CONFIRM_DIALOG_JS)
                 print(f"  Confirm dialog (attempt {attempt+1}):", confirm_r)
                 if "CONFIRM" in str(confirm_r):
